@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>POS レジアプリ</title>
+  <!-- Tailwind CSS (デザイン用) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK (Compat版) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+  <!-- 1. 未ログイン画面 -->
+  <div id="login-view" class="flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="bg-white p-8 rounded-xl shadow-md max-w-sm w-full text-center">
+      <h1 class="text-2xl font-bold mb-4 text-slate-700">🛒 POS レジアプリ</h1>
+      <p class="text-slate-500 mb-6 text-sm">ご利用にはGoogleアカウントでのログインが必要です。</p>
+      <button id="login-btn" onclick="login()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition flex items-center justify-center gap-2">
+        Googleでログイン
+      </button>
+    </div>
+  </div>
+
+  <!-- 2. ログイン後画面 (メインアプリ) -->
+  <div id="app-view" class="hidden min-h-screen p-4 max-w-4xl mx-auto">
+    <!-- ヘッダー -->
+    <header class="flex justify-between items-center bg-white p-4 rounded-xl shadow mb-6">
+      <div class="flex items-center gap-3">
+        <img id="user-photo" src="" class="w-10 h-10 rounded-full border" alt="ユーザーアイコン">
+        <div>
+          <p id="user-name" class="font-bold text-sm"></p>
+          <p id="user-email" class="text-xs text-slate-400"></p>
+        </div>
+      </div>
+      <button onclick="logout()" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 py-2 px-3 rounded-lg font-semibold transition">
+        ログアウト
+      </button>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <!-- 入力フォーム -->
+      <div class="md:col-span-1 bg-white p-5 rounded-xl shadow h-fit">
+        <h2 class="text-lg font-bold mb-4 text-slate-700 border-b pb-2">商品販売登録</h2>
+        
+        <form id="pos-form" onsubmit="saveData(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">商品名 <span class="text-red-500">*</span></label>
+            <input type="text" id="itemName" required class="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例: コーヒー">
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">単価(円) <span class="text-red-500">*</span></label>
+              <input type="number" id="price" min="0" required oninput="calcTotal()" class="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="450">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">個数 <span class="text-red-500">*</span></label>
+              <input type="number" id="quantity" min="1" value="1" required oninput="calcTotal()" class="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+          </div>
+
+          <!-- 自動計算表示 -->
+          <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center">
+            <span class="text-xs font-bold text-indigo-800">合計金額:</span>
+            <span id="total-display" class="text-xl font-black text-indigo-600">0 円</span>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">日付 <span class="text-red-500">*</span></label>
+            <input type="date" id="date" required class="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">メモ</label>
+            <textarea id="memo" rows="2" class="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="特記事項があれば入力"></textarea>
+          </div>
+
+          <div id="error-msg" class="text-red-500 text-xs hidden"></div>
+
+          <button type="submit" id="submit-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg transition shadow">
+            登録する
+          </button>
+        </form>
+      </div>
+
+      <!-- 履歴一覧と集計 -->
+      <div class="md:col-span-2 space-y-4">
+        <!-- 日付別集計表示 (発展機能) -->
+        <div class="bg-white p-4 rounded-xl shadow flex justify-between items-center">
+          <span class="text-sm font-bold text-slate-600">累計売上合計</span>
+          <span id="grand-total" class="text-2xl font-black text-emerald-600">0 円</span>
+        </div>
+
+        <!-- 履歴テーブル -->
+        <div class="bg-white p-5 rounded-xl shadow">
+          <h2 class="text-lg font-bold mb-4 text-slate-700 border-b pb-2">販売履歴一覧</h2>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="bg-slate-50 text-slate-500 border-b text-xs">
+                  <th class="p-2">日付</th>
+                  <th class="p-2">商品名</th>
+                  <th class="p-2">単価 × 個数</th>
+                  <th class="p-2">小計</th>
+                  <th class="p-2">メモ</th>
+                  <th class="p-2 text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody id="sales-list" class="divide-y">
+                <!-- JavaScriptで一覧挿入 -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ★★★ Firebaseの設定情報（ご自身のものに差し替えてください） ★★★
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // Firebase 初期化
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    let currentUser = null;
+
+    // 本日の日付をデフォルトセット
+    document.getElementById('date').value = new Date().toISOString().substring(0, 10);
+
+    // 認証状態の監視 (ログイン制限機能)
+    auth.onAuthStateChanged((user) => {
+      if (user) {
+        currentUser = user;
+        document.getElementById('login-view').classList.add('hidden');
+        document.getElementById('app-view').classList.remove('hidden');
+        document.getElementById('user-name').textContent = user.displayName || 'ユーザー';
+        document.getElementById('user-email').textContent = user.email;
+        document.getElementById('user-photo').src = user.photoURL || 'https://via.placeholder.com/40';
+        loadSalesData();
+      } else {
+        currentUser = null;
+        document.getElementById('login-view').classList.remove('hidden');
+        document.getElementById('app-view').classList.add('hidden');
+      }
+    });
+
+    // Googleログイン
+    function login() {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider).catch((error) => {
+        alert('ログインエラー: ' + error.message);
+      });
+    }
+
+    // ログアウト
+    function logout() {
+      auth.signOut();
+    }
+
+    // 自動計算 (単価 × 個数)
+    function calcTotal() {
+      const price = Number(document.getElementById('price').value) || 0;
+      const quantity = Number(document.getElementById('quantity').value) || 0;
+      const total = price * quantity;
+      document.getElementById('total-display').textContent = total.toLocaleString() + ' 円';
+      return total;
+    }
+
+    // データ保存 (Firestore)
+    async function saveData(e) {
+      e.preventDefault();
+      const errorMsg = document.getElementById('error-msg');
+      errorMsg.classList.add('hidden');
+
+      const itemName = document.getElementById('itemName').value.trim();
+      const price = Number(document.getElementById('price').value);
+      const quantity = Number(document.getElementById('quantity').value);
+      const date = document.getElementById('date').value;
+      const memo = document.getElementById('memo').value.trim();
+      const total = price * quantity;
+
+      // バリデーション
+      if (!itemName || isNaN(price) || isNaN(quantity) || !date) {
+        errorMsg.textContent = 'すべての必須項目を正しく入力してください。';
+        errorMsg.classList.remove('hidden');
+        return;
+      }
+
+      try {
+        await db.collection('sales').add({
+          uid: currentUser.uid, // ユーザーごとに区別 (発展機能)
+          itemName,
+          price,
+          quantity,
+          total,
+          date,
+          memo,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // フォームリセット
+        document.getElementById('pos-form').reset();
+        document.getElementById('date').value = new Date().toISOString().substring(0, 10);
+        calcTotal();
+      } catch (err) {
+        alert('データ保存に失敗しました: ' + err.message);
+      }
+    }
+
+    // データリアルタイム読み込み (ユーザー限定データ取得)
+    function loadSalesData() {
+      db.collection('sales')
+        .where('uid', '==', currentUser.uid)
+        .onSnapshot((snapshot) => {
+          const listElement = document.getElementById('sales-list');
+          listElement.innerHTML = '';
+          let grandTotal = 0;
+
+          const docs = [];
+          snapshot.forEach((doc) => docs.push({ id: doc.id, ...doc.data() }));
+
+          // 日付順降順でソート
+          docs.sort((a, b) => (b.date > a.date ? 1 : -1));
+
+          if (docs.length === 0) {
+            listElement.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">登録されたデータはありません</td></tr>`;
+          } else {
+            docs.forEach((data) => {
+              grandTotal += data.total || 0;
+              const tr = document.createElement('tr');
+              tr.className = 'hover:bg-slate-50 transition';
+              tr.innerHTML = `
+                <td class="p-2 text-xs text-slate-500 whitespace-nowrap">${data.date}</td>
+                <td class="p-2 font-bold text-slate-700">${data.itemName}</td>
+                <td class="p-2 text-xs">${data.price.toLocaleString()}円 × ${data.quantity}</td>
+                <td class="p-2 font-bold text-indigo-600">${data.total.toLocaleString()}円</td>
+                <td class="p-2 text-xs text-slate-500 max-w-[120px] truncate">${data.memo || '-'}</td>
+                <td class="p-2 text-center">
+                  <button onclick="deleteData('${data.id}')" class="text-red-500 hover:text-red-700 text-xs font-semibold">削除</button>
+                </td>
+              `;
+              listElement.appendChild(tr);
+            });
+          }
+
+          document.getElementById('grand-total').textContent = grandTotal.toLocaleString() + ' 円';
+        });
+    }
+
+    // データ削除 (発展機能)
+    async function deleteData(id) {
+      if (confirm('この記録を削除してもよろしいですか？')) {
+        await db.collection('sales').doc(id).delete();
+      }
+    }
+  </script>
+</body>
+</html>
